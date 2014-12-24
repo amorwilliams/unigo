@@ -1,9 +1,10 @@
-package rpc
+package bsonrpc
 
 import (
-	l4g "code.google.com/p/log4go"
+	"errors"
 	"fmt"
 	"io"
+
 	"labix.org/v2/mgo/bson"
 )
 
@@ -27,10 +28,9 @@ func (e *Encoder) Encode(v interface{}) (err error) {
 	}
 
 	if l := len(buf); n != l {
-		err = fmt.Errorf("Wrote %d bytes, should have wrote %d", n, l)
+		err = errors.New(fmt.Sprintf("Wrote %d bytes, should have wrote %d", n, l))
 	}
 
-	l4g.Fine(fmt.Sprintf("RPC Wrote %d bytes of %d to connection from buffer: ", n, len(buf)), buf)
 	return
 }
 
@@ -47,11 +47,9 @@ func (d *Decoder) Decode(pv interface{}) (err error) {
 	n, err := d.r.Read(lbuf[:])
 
 	if n != 4 {
-		err = fmt.Errorf("Corrupted BSON stream: could only read %d", n)
+		err = errors.New(fmt.Sprintf("Corrupted BSON stream: could only read %d", n))
 		return
 	}
-
-	l4g.Fine(fmt.Sprintf("Read %d bytes of 4 byte length from connection, received bytes: ", n), lbuf)
 
 	if err != nil {
 		return
@@ -62,26 +60,21 @@ func (d *Decoder) Decode(pv interface{}) (err error) {
 		(int(lbuf[2]) << 16) |
 		(int(lbuf[3]) << 24)
 
-	l4g.Fine("Message length parsed as: ", length)
-
 	buf := make([]byte, length)
 	copy(buf[0:4], lbuf[:])
 
-	n, err = io.ReadFull(d.r, buf[4:0])
-	l4g.Fine(fmt.Sprintf("Read %d bytes of %d from connection, received bytes: ", n+4, length), buf)
+	n, err = io.ReadFull(d.r, buf[4:])
 
 	if err != nil {
 		return
 	}
 
 	if n+4 != length {
-		err = fmt.Errorf("Expected %d bytes, read %d", length, n)
+		err = errors.New(fmt.Sprintf("Expected %d bytes, read %d", length, n))
 		return
 	}
 
-	if pv != nil {
-		err = bson.Unmarshal(buf, pv)
-	}
+	err = bson.Unmarshal(buf, pv)
 
 	return
 }
