@@ -1,7 +1,6 @@
 package service
 
 import (
-	// l4g "code.google.com/p/log4go"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"time"
