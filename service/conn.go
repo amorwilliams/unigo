@@ -1,9 +1,10 @@
 package service
 
 import (
-	"github.com/gorilla/websocket"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type Connector interface {

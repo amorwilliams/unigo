@@ -7,11 +7,16 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	l4g "code.google.com/p/log4go"
 )
 
-import (
-	l4g "code.google.com/p/log4go"
-	"github.com/amorwilliams/unigo/utils"
+type SendMode int8
+
+const (
+	All SendMode = iota
+	Single
+	Others
 )
 
 type ServiceDelegate interface {
@@ -20,13 +25,10 @@ type ServiceDelegate interface {
 	Stopped()
 	Registered()
 	Unregistered()
-	CreatePeer(conn Connector) (Connector, error)
-	NewMessageReceived(conn Connector, msg string)
-	NewDataReceived(conn Connector, data []byte)
-}
-
-type ClientInfo struct {
-	Address net.Addr
+	ConnectNew(conn Connector) (uuid string, err error)
+	ConnectClose(conn Connector, uuid string)
+	NewMessageReceived(conn Connector, msg string, uuid string)
+	NewDataReceived(conn Connector, data []byte, uuid string)
 }
 
 type Service struct {
@@ -35,9 +37,6 @@ type Service struct {
 	Status         byte
 	registeredChan chan bool
 	shutdownChan   chan bool
-
-	clientMutex sync.Mutex
-	ClientInfo  map[string]ClientInfo
 
 	// for sending the signal into mux()
 	doneChan chan bool
@@ -54,7 +53,6 @@ func CreateService(sd ServiceDelegate, si *ServiceInfo) (s *Service) {
 		ServiceInfo:    si,
 		registeredChan: make(chan bool),
 		shutdownChan:   make(chan bool),
-		ClientInfo:     make(map[string]ClientInfo),
 		shuttingDown:   false,
 	}
 
@@ -114,8 +112,7 @@ func (s *Service) Start() (done *sync.WaitGroup) {
 	go s.listen(":9000")
 
 	// Watch signals for shutdown
-	c := make(chan os.Signal)
-	go watchSignals(c, s)
+	go watchSignals(s)
 
 	s.doneChan = make(chan bool)
 
@@ -173,14 +170,6 @@ func (s *Service) IsTrusted(addr net.Addr) bool {
 	return false
 }
 
-func (s *Service) getClientInfo(clientID string) (ci ClientInfo, ok bool) {
-	s.clientMutex.Lock()
-	defer s.clientMutex.Unlock()
-
-	ci, ok = s.ClientInfo[clientID]
-	return
-}
-
 func (s *Service) listen(addr string) {
 	// var laddr *net.TCPAddr
 	// laddr, err := net.ResolveTCPAddr("tcp", addr)
@@ -219,31 +208,25 @@ func (s *Service) mux() {
 		select {
 		case conn := <-connectionChan:
 			go func() {
-				clientID := utils.NewUUID()
-
-				s.clientMutex.Lock()
-				s.ClientInfo[clientID] = ClientInfo{
-					Address: conn.ws.RemoteAddr(),
-				}
-				s.clientMutex.Unlock()
-
-				connector, err := s.Delegate.CreatePeer(conn)
+				uuid, err := s.Delegate.ConnectNew(conn)
 				if err != nil {
-					l4g.Error("CreatePeer error: ", err)
+					l4g.Error("New connect error: ", err)
 					return
 				}
 
+				defer s.Delegate.ConnectClose(conn, uuid)
+
+			Conn:
 				for {
 					select {
 					case msg := <-conn.recMsg:
-						s.Delegate.NewMessageReceived(connector, string(msg))
+						s.Delegate.NewMessageReceived(conn, string(msg), uuid)
 					case data := <-conn.recData:
-						s.Delegate.NewDataReceived(connector, data)
+						s.Delegate.NewDataReceived(conn, data, uuid)
 					case <-conn.doneChan:
-						break
+						break Conn
 					}
 				}
-
 			}()
 		case register := <-s.registeredChan:
 			if register {
@@ -254,12 +237,13 @@ func (s *Service) mux() {
 		case <-s.shutdownChan:
 			s.shutdown()
 		case <-s.doneChan:
-			break
+			return
 		}
 	}
 }
 
-func watchSignals(c chan os.Signal, s *Service) {
+func watchSignals(s *Service) {
+	c := make(chan os.Signal)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGKILL, syscall.SIGSEGV /*syscall.SIGSTOP,*/, syscall.SIGTERM)
 
 	for {
