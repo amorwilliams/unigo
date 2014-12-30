@@ -1,7 +1,8 @@
-package connection
+package service
 
 import (
 	"encoding/json"
+	"sync"
 )
 
 const (
@@ -17,6 +18,7 @@ type ConnectionService struct {
 	connCount    int64
 	loginedCount int64
 	logined      ClientMap
+	sync.Mutex
 }
 
 func NewConnectionService(serverId, config string) *ConnectionService {
@@ -30,6 +32,9 @@ func NewConnectionService(serverId, config string) *ConnectionService {
 
 //Add Client
 func (cs *ConnectionService) Add(uid, info string) {
+	cs.Lock()
+	defer cs.Unlock()
+
 	if _, ok := cs.logined[uid]; !ok {
 		cs.loginedCount++
 	}
@@ -41,6 +46,9 @@ func (cs *ConnectionService) Add(uid, info string) {
 }
 
 func (cs *ConnectionService) Remove(uid string) {
+	cs.Lock()
+	defer cs.Unlock()
+
 	if _, ok := cs.logined[uid]; !ok {
 		cs.loginedCount--
 	}
@@ -50,6 +58,9 @@ func (cs *ConnectionService) Remove(uid string) {
 
 //Update client info
 func (cs *ConnectionService) UpdateInfo(uid, info string) {
+	cs.Lock()
+	defer cs.Unlock()
+
 	cinfo, ok := cs.logined[uid]
 	if !ok {
 		return
@@ -64,10 +75,16 @@ func (cs *ConnectionService) UpdateInfo(uid, info string) {
 }
 
 func (cs *ConnectionService) IncrCount() {
+	cs.Lock()
+	defer cs.Unlock()
+
 	cs.connCount++
 }
 
 func (cs *ConnectionService) DecrCount(uid string) {
+	cs.Lock()
+	defer cs.Unlock()
+
 	if cs.connCount > 0 {
 		cs.connCount--
 	}

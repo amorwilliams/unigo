@@ -1,15 +1,15 @@
 package service
 
-import (
-	"net"
-)
+// import (
+// 	"net"
+// )
 
-type ServiceInfo struct {
-	UUID    string
-	Name    string
-	Version string
+// type ServiceInfo struct {
+// 	UUID    string
+// 	Name    string
+// 	Version string
 
-	ServiceAddr net.Addr
+// 	ServiceAddr net.Addr
 
-	Registered bool
-}
+// 	Registered bool
+// }
