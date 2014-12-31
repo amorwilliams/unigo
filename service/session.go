@@ -3,16 +3,17 @@ package service
 import (
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/amorwilliams/unigo/connector"
 	log "github.com/cihub/seelog"
-	"sync"
 )
 
 type SessionService struct {
 	single   bool
 	sessions map[string]*Session
 	uidMap   map[string][]Session
-	l        sync.Mutex
+	l        sync.RWMutex
 }
 
 func NewSessionService() *SessionService {
@@ -20,6 +21,7 @@ func NewSessionService() *SessionService {
 		single:   false,
 		sessions: make(map[string]*Session),
 		uidMap:   make(map[string][]Session),
+		l:        new(sync.RWMutex),
 	}
 }
 
@@ -104,16 +106,16 @@ func (ss *SessionService) Unbind(sid, uid string) error {
 }
 
 func (ss *SessionService) Get(sid string) (s *Session, ok bool) {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	s, ok = ss.sessions[sid]
 	return
 }
 
 func (ss *SessionService) GetByUid(uid string) (ses []Session, ok bool) {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	ses, ok = ss.uidMap[uid]
 	return
@@ -146,6 +148,9 @@ func (ss *SessionService) Remove(sid string) {
 }
 
 func (ss *SessionService) Import(sid, k string, v interface{}) error {
+	ss.l.Lock()
+	defer ss.l.Unlock()
+
 	s, ok := ss.sessions[sid]
 	if !ok {
 		return errors.New(fmt.Sprintf("session does not exist, sid: %s", sid))
@@ -156,6 +161,9 @@ func (ss *SessionService) Import(sid, k string, v interface{}) error {
 }
 
 func (ss *SessionService) ImportAll(sid string, settings map[string]interface{}) error {
+	ss.l.Lock()
+	defer ss.l.Unlock()
+
 	s, ok := ss.sessions[sid]
 	if !ok {
 		return errors.New(fmt.Sprintf("session does not exist, sid: %s", sid))
@@ -168,12 +176,12 @@ func (ss *SessionService) ImportAll(sid string, settings map[string]interface{})
 }
 
 func (ss *SessionService) Kick(uid, reason string) {
+	ss.l.RLock()
+	defer ss.l.RUnlock()
+
 	if reason == "" {
 		reason = "kick"
 	}
-
-	ss.l.Lock()
-	defer ss.l.Unlock()
 
 	ses, ok := ss.uidMap[uid]
 	if !ok {
@@ -191,8 +199,8 @@ func (ss *SessionService) Kick(uid, reason string) {
 }
 
 func (ss *SessionService) KickBySessionId(sid string) {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	s, ok := ss.sessions[sid]
 	if !ok {
@@ -203,8 +211,8 @@ func (ss *SessionService) KickBySessionId(sid string) {
 }
 
 func (ss *SessionService) SendMessage(sid string, data []byte) error {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	s, ok := ss.sessions[sid]
 	if !ok {
@@ -214,8 +222,8 @@ func (ss *SessionService) SendMessage(sid string, data []byte) error {
 }
 
 func (ss *SessionService) SendMessageByUid(uid string, data []byte) error {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	ses, ok := ss.uidMap[uid]
 	if !ok {
@@ -233,20 +241,18 @@ func (ss *SessionService) SendMessageByUid(uid string, data []byte) error {
 	return nil
 }
 
-type SessCallback func(s *Session)
-
-func (ss *SessionService) ForeachSess(scb SessCallback) {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+func (ss *SessionService) ForeachSess(scb func(s *Session)) {
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	for _, s := range ss.sessions {
 		scb(s)
 	}
 }
 
-func (ss *SessionService) ForeachBindedSess(scb SessCallback) {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+func (ss *SessionService) ForeachBindedSess(scb func(s *Session)) {
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	for _, ses := range ss.uidMap {
 		for _, s := range ses {
@@ -256,8 +262,8 @@ func (ss *SessionService) ForeachBindedSess(scb SessCallback) {
 }
 
 func (ss *SessionService) GetSessCount() int {
-	ss.l.Lock()
-	defer ss.l.Unlock()
+	ss.l.RLock()
+	defer ss.l.RUnlock()
 
 	return len(ss.sessions)
 }
@@ -282,6 +288,7 @@ type Session struct {
 	conn       Connector.Connector
 	service    *SessionService
 	state      SessionState
+	l          sync.RWMutex
 }
 
 func NewSession(sid, frontendId string, conn Connector.Connector, service *SessionService) *Session {
@@ -293,26 +300,39 @@ func NewSession(sid, frontendId string, conn Connector.Connector, service *Sessi
 		conn:       conn,
 		service:    service,
 		state:      ST_INITED,
+		l:          new(sync.RWMutex),
 	}
 }
 
-func (s *Session) toFrontendSession() {
-
+func (s *Session) toFrontendSession() *FrontendSession {
+	return NewFrontendSession(s)
 }
 
 func (s *Session) bind(uid string) {
+	s.l.Lock()
+	defer s.l.Unlock()
+
 	s.uid = uid
 }
 
 func (s *Session) unbind(uid string) {
+	s.l.Lock()
+	defer s.l.Unlock()
+
 	s.uid = ""
 }
 
 func (s *Session) Set(k string, v interface{}) {
+	s.l.Lock()
+	defer s.l.Unlock()
+
 	s.settings[k] = v
 }
 
 func (s *Session) Get(k string) (v interface{}, ok bool) {
+	s.l.RLock()
+	defer s.l.RUnlock()
+
 	v, ok = s.settings[k]
 	return
 }
@@ -322,6 +342,9 @@ func (s *Session) send(data []byte) error {
 }
 
 func (s *Session) Close(reason string) {
+	s.l.Lock()
+	defer s.l.Unlock()
+
 	log.Debugf("session on [%s] is closed with session id: %s", s.frontendId, s.sid)
 	if s.state == ST_CLOSED {
 		return
@@ -333,22 +356,71 @@ func (s *Session) Close(reason string) {
 }
 
 type FrontendSession struct {
-	session *Session
+	sid        string
+	frontendId string
+	uid        string
+	settings   map[string]interface{}
+	session    *Session
+	service    *SessionService
+	l          sync.Mutex
 }
 
 func NewFrontendSession(s *Session) *FrontendSession {
-	var fs *Session
-	clone(s, fs)
-
 	return &FrontendSession{
-		session: fs,
+		sid:        s.sid,
+		uid:        s.uid,
+		frontendId: s.frontendId,
+		settings:   dclone(s.settings),
+		session:    s,
+		service:    s.service,
 	}
 }
 
-func clone(src, dst *Session) {
-	dst.sid = src.sid
-	dst.uid = src.uid
-	dst.frontendId = src.frontendId
+func (fs *FrontendSession) Bind(uid string) error {
+	if err := fs.service.Bind(fs.sid, uid); err != nil {
+		return err
+	}
+
+	fs.l.Lock()
+	defer fs.l.Unlock()
+
+	fs.uid = uid
+	return nil
+}
+
+func (fs *FrontendSession) Unbind(uid string) error {
+	if err := fs.service.Unbind(fs.sid, uid); err != nil {
+		return err
+	}
+
+	fs.l.Lock()
+	defer fs.l.Unlock()
+
+	fs.uid = ""
+	return nil
+}
+
+func (fs *FrontendSession) Get(k string) (v interface{}, ok bool) {
+	fs.l.Lock()
+	defer fs.l.Unlock()
+
+	v, ok = fs.settings[k]
+	return
+}
+
+func (fs *FrontendSession) Set(k string, v interface{}) {
+	fs.l.Lock()
+	defer fs.l.Unlock()
+
+	fs.settings[k] = v
+}
+
+func (fs *FrontendSession) Push(k string) error {
+	return fs.service.Import(fs.sid, k, fs.Get(k))
+}
+
+func (fs *FrontendSession) PushAll() error {
+	return fs.service.ImportAll(fs.sid, fs.settings)
 }
 
 func dclone(src map[string]interface{}) map[string]interface{} {
